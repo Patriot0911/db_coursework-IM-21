@@ -1,7 +1,7 @@
 # Реалізація інформаційного та програмного забезпечення
 
 В рамках проекту розробляється:
-- ~~SQL-скрипт для створення на початкового наповнення бази даних~~
+- SQL-скрипт для створення на початкового наповнення бази даних
 - RESTfull сервіс для управління даними
 
 ## SQL-Скрипт для створення початкового наповнення бази даних
@@ -360,5 +360,389 @@ Insert into mydb.category (name, description, Post_id, Category_id) Values
 ```
 
 
-## RESTfull Сервіс для управління даними
-*У розробці...*
+## Головний файл index.js
+у цьому файлі описується сам запуск сервера та middleware, себто проміжне ПЗ
+
+Сервер працює на порті: *3000*
+
+Тобто на локальній машині доступ до нього можна отримати тут: "``http://localhost:3000``"
+
+
+PS: *Коментарі по коду присутні лише у деяких місцях, де пояснення з'являється або вперше, або ж потребує для загального розуміння результату.*
+```js
+import express from 'express';
+
+import getRolesRouter from './routes/roles.js';
+
+const app = express();
+const PORT = 3000; // Порт на якому працює сервер
+
+app.use(express.json()); // проміже ПЗ яке виступає парсером запитів
+app.use(getRolesRouter); // проміжне ПЗ для шляхів по об'єкту "roles"
+
+app.listen(PORT, () => {
+    console.log(`Server is running on port: ${PORT}\nhttp://localhost:${PORT}`);
+});
+```
+
+## Файл з шляхами/маршрутами roles.js
+
+Тут прописані усі шляхи, які реалізовані нашим сервером.
+
+```js
+import express from 'express';
+import * as rolesControllers from '../controllers/roles-controllers.js';
+const router = express.Router();
+
+/* Секція для GET методів */
+router.get('/roles/:id', rolesControllers.getRoleById);
+router.get('/roles', rolesControllers.getAllRoles);
+
+/* Секція для POST методів */
+router.post('/roles', rolesControllers.postRole);
+
+/* Секція для PUT методів */
+router.put('/roles/:id', rolesControllers.putRoleById);
+
+/* Секція для DELETE методів */
+router.delete('/roles/:id', rolesControllers.deleteRoleById);
+router.delete('/roles', rolesControllers.deleteAllRoles);
+
+export default router;
+```
+
+## Файл з контроллерами
+Реалізація усіх контроллерів відбувається тут. Можна вважати, що це найважливіший файл нашого сервера, але варто зазначити, що для покращення коду, ми винесли весь функціонал mysql запитів в окремі файли, тим самим декомпозувавши наш проєкт і надавши йому більше можливостей для повторного використання, себто зробили код більш реюзабельним.
+
+```js
+import { getMySQLRoles, getMySQLRolePermissions } from '../mysql/get-data.js';
+import { insertMySQLRole } from '../mysql/insert-data.js';
+import { updateMySQLRole } from '../mysql/update-data.js';
+import {
+    deleteMySQLRoles,
+    deleteMySQLRolePermissions,
+    deleteMySQLUsersWithRole
+} from '../mysql/delete-data.js';
+
+/* Отримання ролі по ідентифікатору з бази даних */
+export const getRoleById = async (req, res) => {
+    const roleId = req.params.id;
+    const roleResponse = await getMySQLRoles(roleId);
+    if(roleResponse.dbError) // Ми отримали помилку, і маємо повернути її
+        return res.status(500).send(`Role error:\n` + roleResponse.dbResponse);
+    if(!roleResponse.dbResponse || roleResponse.dbResponse.length < 1)
+        return res.status(204).send('No role found'); // Ролі з таким ID не існує
+    const permissionsResponse = await getMySQLRolePermissions(roleId);
+    if(permissionsResponse.dbError)
+        return res.status(500).send(`Permissions error:\n` + permissionsResponse.dbResponse);
+      /*
+        Отримання цієї помилки вказує саме на проблему з нашим запитом, або ж самою базою даних
+        Якби прав для ролі не існувало - ми отримали б просто пустий масив, бо такий варіант теж є можливим
+      */
+    res.status(200)
+        .json({
+            ...roleResponse.dbResponse[0],
+            permissions: permissionsResponse.dbResponse
+        });
+};
+
+export const getAllRoles = async (_, res) => {
+    const {
+        dbError,
+        dbResponse
+    } = await getMySQLRoles();
+    if(dbError)
+        return res.status(500).send(dbResponse);
+    res.status(200).json(dbResponse);
+};
+
+export const postRole = async (req, res) => {
+    const roleInfo = req.body;
+    if(!roleInfo.name)
+        return res.status(400).send('To create a role, you must specify a name');
+    /*
+      За умов нашого коду - ця помилка є неможливою,
+      проте якщо спробувати використати цей шматок коду в іншому місці - розробник отримає помилку.
+      Загально, це було зроблено, аби при спробі повторного використання коду було розуміння,
+      що саме є важливим для роботи коду
+    */
+    const {
+        dbError,
+        dbResponse
+    } = await insertMySQLRole(roleInfo);
+    if(dbError)
+        return res.status(500).send(dbResponse);
+    res.status(201)
+        .json({
+            id: dbResponse.insertId,
+            name: roleInfo.name,
+            description: roleInfo.description
+        });
+};
+
+export const putRoleById = async (req, res) => {
+    const roleData = req.body;
+    const roleId = req.params.id;
+    if(!roleData)
+        return res.status(400).send('Cannot find request param `id`');
+    const {
+        dbError,
+        dbResponse
+    } = await updateMySQLRole(roleData, roleId);
+    if(dbError)
+        return res.status(500).send(dbResponse);
+    res.status(200)
+        .json(dbResponse);
+};
+
+export const deleteRoleById = async (req, res) => {
+    const roleId = req.params.id;
+    if(!roleId)
+        return res.status(400).send('Cannot find request param `id`');
+    const deleteAllData = req.body.all;
+    if(deleteAllData) {
+      /*
+        Зважаючи на те, що у нашій схемі прописані зв'язки між ролями, правами та користувачами,
+        ми маємо розуміти, що видалення ролі спричинить помилку та унеможливить роботу системи.
+        Таким чином, якщо ми хочемо видалити роль з нашої бази - ми маємо прорахувати ці варіанти,
+        та видалити усі пов'язані дані з таблички.
+
+        Такі дії можуть призвести до небажаних результатів, тому ми й додаємо УМОВНУ перевірку.
+        Перевірка є умовною, бо так чи інакше це не є безпечною перевіркою, а лише симуляцією її роботи
+      */
+        const permissionsResponse = await deleteMySQLRolePermissions(roleId);
+        if(permissionsResponse.dbError)
+            return res.status(500).send(`Permissions error:\n` + permissionsResponse.dbResponse);
+        const usersResponse = await deleteMySQLUsersWithRole(roleId);
+        if(usersResponse.dbError)
+            return res.status(500).send(`Users error:\n` + usersResponse.dbResponse);
+    };
+    const rolesResponse = await deleteMySQLRoles(roleId);
+    if(rolesResponse.dbError)
+        return res.status(500).send(rolesResponse.dbResponse);
+    res.status(200)
+        .json(rolesResponse.dbResponse);
+};
+
+export const deleteAllRoles = async (_, res) => {
+    const {
+        dbError,
+        dbResponse
+    } = await deleteMySQLRoles();
+    /*
+      Як і було сказано у видаленні однієї ролі - це може створити перелік помилок,
+      які спричинені існуванням обов'язкових зв'язків.
+      Тому на етапі демонстрації використання Restful сервісу, я вважаю не потрібним створення таких інцидентів
+    */
+    if(dbError)
+        return res.status(500).send(dbResponse);
+    res.status(200)
+        .json(dbResponse);
+};
+```
+
+## Файл створення Pool -а підключення до нашої DB mysql/index.js
+```js
+import mysql from 'mysql2/promise';
+
+const dbInfo = {
+    user:       "root", // ім'я користувача
+    password:   "0hQjgq5xA3cIKbj", // відповідний пароль
+    database:   "mydb", // назва db
+    host:       "localhost" // хост, у нашому випадку наша ж машина
+};
+
+const pool = mysql.createPool(dbInfo);
+
+export default pool;
+```
+
+## Інформація про наші MySQL запити
+При спробі створити запит до нашої бази, ми використовуємо try catch, аби отримати інформацію про можливі помилки та передати їх у відповідь.
+
+Також, для загального розуміння, кожна функція/реалізатор запитів - повертає нам об'єкт, з полями *dbResponse* та *dbError*.
+
+Тобто відповідь ми можемо схематично зобразити якось так, для більшого розуміння:
+```ts
+interface mysqlFuncReturn {
+  dbError?: boolean;
+  dbResponse: [] | {} | string;
+};
+```
+
+## Файл з MySQL DELETE запитами delete-data.js
+
+```js
+import pool from './index.js';
+
+export const deleteMySQLRoles = async (roleId = undefined) => {
+    const sqlQuery = `
+        DELETE FROM mydb.role
+        ${roleId ? ` WHERE id = ${roleId};` : ';'}
+    `;
+    try {
+        const [response] = await pool.query(sqlQuery);
+        return {
+            dbResponse: response
+        };
+    } catch(e) {
+        return {
+            dbError: true,
+            dbResponse: e.sqlMessage
+        };
+    };
+};
+
+export const deleteMySQLRolePermissions = async (roleId, permId = undefined) => {
+    const sqlQuery = `
+        DELETE FROM mydb.permission_has_role
+        WHERE
+        Role_id = ${roleId}
+        ${permId ? ` AND Permission_id = ${permId};` : ';'}
+    `;
+    try {
+        const [response] = await pool.query(sqlQuery);
+        return {
+            dbResponse: response
+        };
+    } catch(e) {
+        return {
+            dbError: true,
+            dbResponse: e.sqlMessage
+        };
+    };
+};
+
+export const deleteMySQLUsersWithRole = async (roleId) => {
+    const sqlDeleteUsersAccesses = `
+        DELETE
+        FROM mydb.access a
+        WHERE a.User_id IN
+            (
+                SELECT id
+                FROM mydb.user u
+                WHERE u.Role_id = ${roleId}
+            );
+    `;
+    const sqlDeleteUsers = `
+        DELETE
+        FROM mydb.user
+        WHERE Role_id = ${roleId};
+    `;
+    try {
+        await pool.query(sqlDeleteUsersAccesses);
+        const [response] = await pool.query(sqlDeleteUsers);
+        return {
+            dbResponse: response
+        };
+    } catch(e) {
+        return {
+            dbError: true,
+            dbResponse: e.sqlMessage
+        };
+    };
+};
+```
+
+## Файл з MySQL SELECT запитами get-data.js
+
+```js
+import pool from './index.js';
+
+export const getMySQLRoles = async (roleId = undefined) => {
+    const sqlQuery = `
+        SELECT *
+        FROM mydb.role
+        ${roleId ? ` WHERE id = ${roleId};` : ';'}
+    `;
+    try {
+        const [response] = await pool.query(sqlQuery);
+        return {
+            dbResponse: response
+        };
+    } catch(e) {
+        return {
+            dbError: true,
+            dbResponse: e.sqlMessage
+        };
+    };
+};
+
+export const getMySQLRolePermissions = async (roleId = undefined) => {
+    const sqlQuery = `
+        SELECT Permission_id
+        FROM mydb.permission_has_role
+        ${roleId ? ` WHERE Role_id = ${roleId};` : ';'}
+    `;
+    try {
+        const [response] = await pool.query(sqlQuery);
+        return {
+            dbResponse: response
+        };
+    } catch(e) {
+        return {
+            dbError: true,
+            dbResponse: e.sqlMessage
+        };
+    };
+};
+```
+
+## Файл з MySQL INSERT запитами insert-data.js
+
+```js
+import pool from './index.js';
+
+export const insertMySQLRole = async (roleInfo) => {
+    const sqlQuery = `
+        INSERT INTO mydb.role
+        (name, description)
+        VALUES
+        ("${roleInfo.name}", "${roleInfo.description}");
+    `;
+    try {
+        const [response] = await pool.query(sqlQuery);
+        return {
+            dbResponse: response
+        };
+    } catch (e) {
+        return {
+            dbError: true,
+            dbResponse: e.sqlMessage
+        };
+    };
+};
+```
+
+## Файл з MySQL UPDATE запитами update-data.js
+
+```js
+import pool from './index.js';
+
+// Просто функція-утіліта
+const concatSQLSetString = (data, str = '', index = 0) => {
+    const dataKeys = Object.keys(data);
+    const newStr = str + `${dataKeys[index]}='${data[dataKeys[index]]}'`;
+    return dataKeys.length-1 > index ? concatSQLSetString(data, newStr + ', ', ++index) : newStr;
+};
+
+export const updateMySQLRole = async (roleInfo, roleId) => {
+    const sqlUpdateString = concatSQLSetString(roleInfo);
+    const sqlQuery = `
+        UPDATE mydb.role
+        SET ${sqlUpdateString}
+        WHERE id = ${roleId};
+    `;
+    try {
+        const [response] = await pool.query(sqlQuery);
+        return {
+            dbResponse: response
+        };
+    } catch(e) {
+        return {
+            dbError: true,
+            dbResponse: e.sqlMessage
+        };
+    }
+};
+```

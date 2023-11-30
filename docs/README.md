@@ -7,9 +7,8 @@ footer: "ECL 2.0 Licensed | Copyright © [2023] [Nata]"
 ---
 
 
-**Виконали:**
+**Виконав:**
 
-<!-- *студент(-ка) 2-го курсу, групи (шифр групи)*<span padding-right:5em></span> **[ім’я ПРІЗВИЩЕ] [Посилання email, tg, fb]** -->
 *студент 2-го курсу, групи IM-21*<span padding-right:5em></span> **Олесь Потаскалов**   [alexandr.potaskalov@gmail.com,     [Telegram](https://t.me/Patriot25565)]
 
 
